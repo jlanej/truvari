@@ -585,8 +585,6 @@ def parse_args(args):
                         help="Motif similarity threshold (%(default)s)")
     parser.add_argument("-m", "--min-length", type=truvari.restricted_int, default=50,
                         help="Minimum size of entry to annotate (%(default)s)")
-    parser.add_argument("-R", "--regions-only", action="store_true",
-                        help="Only write variants within --repeats regions (%(default)s)")
     parser.add_argument("--no-estimate", action="store_true",
                         help="Skip INS estimation procedure and run everything through TRF. (%(default)s)")
     parser.add_argument("-C", "--chunk-size", type=int, default=5,
@@ -636,22 +634,13 @@ def trf_main(cmdargs):
     check_params(args)
     trfshared.args = args
 
-    m_regions = None
-    m_process = None
-    if args.regions_only:
-        m_regions = iter_tr_regions(args.repeats)
-        m_process = process_tr_region
-    else:
-        # refactor. need streaming mode
-        m_regions = truvari.ref_ranges(args.reference, chunk_size=int(args.chunk_size * 1e6))
-        m_process = process_ref_region
-
+    m_regions = iter_tr_regions(args.repeats)
 
     vcf = pysam.VariantFile(trfshared.args.input)
     new_header = edit_header(vcf.header)
 
     with multiprocessing.Pool(args.threads, maxtasksperchild=1) as pool:
-        chunks = pool.imap_unordered(m_process, m_regions)
+        chunks = pool.imap_unordered(process_tr_region, m_regions)
         pool.close()
         with open(args.output, 'w') as fout:
             fout.write(str(new_header))

@@ -10,6 +10,7 @@ import logging
 import argparse
 import resource
 import multiprocessing
+from io import StringIO
 
 import pysam
 from pysam import bcftools
@@ -83,45 +84,19 @@ def parse_regions(argument):
             ret.append((chrom, start, end))
     return ret
 
-def get_reference(fn, output, chrom, start, end):
-    """
-    Pull a subset of the reference and put into a file
-    Returns the anchor base (1bp upstream from start) for msa2vcf
-    """
-    fasta = pysam.FastaFile(fn)
-    oseq = fasta.fetch(chrom, start - 2, end)
-    # no need to make it pretty?
-    #oseq = re.sub("(.{60})", "\\1\n", oseq, 0, re.DOTALL)
-    with open(output, 'w') as fout:
-        fout.write(f">ref_{chrom}_{start}_{end}\n{oseq[1:]}\n")
-    with open(output + '.ref.fa', 'w') as fout:
-        fout.write(f">{chrom}:{start}-{end}\n{oseq[1:]}\n")
-    return oseq[0]
 
-def pull_variants(vcf, region, output, ref, samples=None):
+def pull_variants(vcf_fn, chrom, start, end):
     """
-    Given vcf and a region, grab the relevant variants
-    Maybe can make fill-from fasta optional.. but it isn't huge overhead (for now)
+    Given vcf and a region, grab the variants
     """
-    chrom, start, end = region
-    if samples is not None:
-        samples = "-s " + ",".join(samples)
-    else:
-        samples = ""
-    cmd = f"""bcftools view -c 1 {samples} -r {chrom}:{start}-{end} {vcf} \
-| bcftools +fill-from-fasta /dev/stdin -- -c REF -f {ref} \
-| bgzip > {output} && tabix {output}"""
+    ret = []
+    vcf = pysam.VariantFile(vcf_fn)
+    for entry in vcf.fetch(chrom, start, end):
+        st, ed = truvari.entry_boundaries(entry)
+        if start <= st < ed <= end:
+            ret.append(entry)
+    return ret
 
-    ret = truvari.cmd_exe(cmd, pipefail=True)
-    if ret.ret_code != 0:
-        logging.error("Unable to pull variants from %s", vcf)
-        logging.error(ret.stderr)
-        sys.exit(1)
-    cnt = 0
-    with pysam.VariantFile(output) as fh:
-        for _ in fh:
-            cnt += 1
-    return cnt
 
 def build_consensus(vcf, ref, region, output, samples=None, prefix_name=False):
     """
@@ -160,7 +135,30 @@ def run_mafft(seq_fn, output, params=DEFAULT_MAFFT_PARAM):
         return False
     return True
 
-# pylint: disable=too-many-locals
+def make_haplotypes(variants, refseq, refstart, sample=0):
+    """
+    Make the phased haplotypes for a set of variants
+    """
+    def add_var(entry, seq, last_pos, ref, refpos):
+        """
+        Add upto variant's end to the sequence
+        """
+        seq.write(ref[last_pos: entry.start - refpos])
+        seq.write(entry.alts[0])
+        return entry.stop - refpos
+
+    m_paths = [StringIO(), StringIO()]
+    last_pos = [0, 0]
+    for entry in variants:
+        if entry.samples[sample]["GT"][0] == 1:
+            last_pos[0] = add_var(entry, m_paths[0], last_pos[0], refseq, refstart)
+        if entry.samples[sample]["GT"][1] == 1:
+            last_pos[1] = add_var(entry, m_paths[1], last_pos[1], refseq, refstart)
+    for pos, path in enumerate(m_paths):
+        path.write(refseq[last_pos[pos]:])
+        path.seek(0)
+    return [_.read() for _ in m_paths]
+
 def phab(base_vcf, reference, output_dir, var_region, buffer=100,
         comp_vcf=None, bSamples=None, cSamples=None,
         mafft_params=DEFAULT_MAFFT_PARAM, prefix_comp=False):
@@ -188,51 +186,52 @@ def phab(base_vcf, reference, output_dir, var_region, buffer=100,
     :param `prefix_comp`: Ensure unique sample names by prefixing comp samples
     :type `prefix_comp`: :class:`bool`
     """
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    buff_region = (var_region[0], var_region[1] - buffer, var_region[2] + buffer)
-
     if bSamples is None:
         bSamples = list(pysam.VariantFile(base_vcf).header.samples)
     if comp_vcf and cSamples is None:
         cSamples = list(pysam.VariantFile(comp_vcf).header.samples)
-
-    # Make sure there are variants first
-    subset_base_vcf = os.path.join(output_dir, "base.vcf.gz")
-    num_vars = pull_variants(base_vcf, var_region, subset_base_vcf, reference, bSamples)
-    if comp_vcf is not None:
-        subset_comp_vcf = os.path.join(output_dir, "comp.vcf.gz")
-        num_vars += pull_variants(comp_vcf, var_region, subset_comp_vcf, reference, cSamples)
-
-    if num_vars == 0:
+    
+    b_variants = pull_variants(base_vcf, *var_region)
+    c_variants = [] if comp_vcf is None else pull_variants(comp_vcf, *var_region)
+    
+    # No variants to harmonize?
+    if len(b_variants) + len(c_variants) == 0:
         return
 
-    sequences = os.path.join(output_dir, "haps.fa")
-    anchor_base = get_reference(reference, sequences, *buff_region)
+    ref = pysam.FastaFile(reference)
+    start = var_region[1] - buffer - 2
+    end = var_region[2] + buffer
+    anchor_base = 'N' # will need later
+    sequences = truvari.make_temp_filename(suffix=".fa")
 
-    build_consensus(subset_base_vcf, reference, buff_region, sequences, bSamples)
-
-    if comp_vcf is not None:
-        build_consensus(subset_comp_vcf, reference, buff_region, sequences, cSamples, prefix_comp)
-
-    msa_output = os.path.join(output_dir, "msa.fa")
+    with open(sequences, 'w') as fout:
+        oseq = ref.fetch(var_region[0], start, end)
+        anchor_base = oseq[0]
+        ref_seq = oseq[1:]
+        fout.write(f">ref_{var_region[0]}_{start}_{end}\n{ref_seq}\n")
+        start += 1 # Don't make haplotypes over anchor base
+        
+        for samp in bSamples:
+            for i, seq in make_haplotypes(b_variants, ref_seq, start, samp)
+                name = f"{sample}_{i + 1}_"
+                fout.write(f">{name}\n{seq}\n")
+                    
+        if cSamples is not None:
+            prefix = 'p:' if prefix_comp else ''
+            for samp in cSamples:
+                for i, seq in make_haplotypes(c_variants, ref_seq, start, samp)
+                    name = f"{prefix}{sample}_{i + 1}_"
+                    fout.write(f">{name}\n{seq}\n")
+ 
+    msa_output = sequences + '.msa'
     if not run_mafft(sequences, msa_output, mafft_params):
         return
 
-    output_vcf = os.path.join(output_dir, "output.vcf")
     vcf = pysam.VariantFile(base_vcf)
     n_header = '##fileformat=VCFv4.1\n##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
     n_header += str(vcf.header.contigs[var_region[0]].header_record)
 
-    with open(output_vcf, 'w') as fout:
-        try:
-            fout.write(truvari.msa2vcf(msa_output, n_header, anchor_base))
-        except RuntimeWarning:
-            return
-
-    truvari.compress_index_vcf(output_vcf)
-# pylint: enable=too-many-locals
+    return truvari.msa2vcf(msa_output, n_header, anchor_base)
 
 def consolidate_phab_vcfs(phab_dir, out_vcf):
     """

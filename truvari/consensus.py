@@ -25,8 +25,7 @@ def create_allele(ref, variants, refpos = 0):
     seq.seek(0)
     return seq.read()
 
-
-def make_paths(variants, refseq, refstart, max_paths=2):
+def make_uhaplotypes(variants, refseq, refstart, max_paths=2):
     """
     Given a set of variants, find upto max_paths consensus sequences through the variants
     """
@@ -47,6 +46,29 @@ def make_paths(variants, refseq, refstart, max_paths=2):
             logging.error("Cannot make non-overlapping paths for variants. Try increasing max_paths")
     return [create_allele(refseq, _, refstart) for _ in m_paths]
 
+def make_haplotypes(variants, refseq, refstart, sample=0):
+    """
+    Make the phased haplotypes for a set of variants
+    """
+    def add_var(entry, seq, last_pos, ref, refpos):
+        """
+        Add upto variant's end to the sequence
+        """
+        seq.write(ref[last_pos: entry.start - refpos])
+        seq.write(entry.alts[0])
+        return entry.stop - refpos
+
+    m_paths = [StringIO(), StringIO()]
+    last_pos = [0, 0]
+    for entry in variants:
+        if entry.samples[sample]["GT"][0] == 1:
+            last_pos[0] = add_var(entry, m_paths[0], last_pos[0], refseq, refstart)
+        if entry.samples[sample]["GT"][1] == 1:
+            last_pos[1] = add_var(entry, m_paths[1], last_pos[1], refseq, refstart)
+    for pos, path in enumerate(m_paths):
+        path.write(refseq[last_pos[pos]:])
+        path.seek(0)
+    return [_.read() for _ in m_paths]
 
 def test():
     chrom, start, end = "chr20", 35539135, 35539719
@@ -59,7 +81,7 @@ def test():
     start -= BUFFER
     end += BUFFER
     m_seq = ref.fetch(chrom, start, end)
-    seqs = make_paths(m_vars, m_seq, start)
+    seqs = make_haplotypes(m_vars, m_seq, start)
     for pos, i in enumerate(seqs):
         pos += 1
         print(f">samp_{pos}_\n{i}")
