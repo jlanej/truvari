@@ -51,7 +51,6 @@ Dev methods:
 :meth:`benchdir_count_entries`
 :meth:`chunker`
 :meth:`cmd_exe`
-:meth:`consolidate_phab_vcfs`
 :meth:`count_entries`
 :meth:`fchain`
 :meth:`file_zipper`
@@ -144,7 +143,6 @@ from truvari.pipeline import (
 from truvari.phab import (
     phab,
     phab_multi,
-    consolidate_phab_vcfs
 )
 
 from truvari.region_vcf_iter import (

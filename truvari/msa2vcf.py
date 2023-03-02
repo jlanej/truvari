@@ -9,15 +9,6 @@ import pysam
 REFIDX = 3
 ALTIDX = 4
 
-def build_header(chrom=None):
-    """
-    Bare minimum vcf header
-    """
-    ret = '##fileformat=VCFv4.1\n##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">'
-    if chrom is not None:
-        ret += f"\n##contig=<ID={chrom}>\n"
-    return ret
-
 def msa_to_vars(msa, ref_seq, chrom, start_pos=0, abs_anchor_base='N'):
     """
     Turn MSA into VCF entries and their presence in samples
@@ -38,7 +29,7 @@ def msa_to_vars(msa, ref_seq, chrom, start_pos=0, abs_anchor_base='N'):
         anchor_base = ref_seq[0] if ref_seq[0] != '-' else abs_anchor_base
 
         cur_variant = []
-        cur_pos = start_pos # still have a problem here with anchor base.
+        cur_pos = start_pos + 1 # still have a problem here with anchor base.
         # This is too long. need to have a separate zip method
         for ref_base, alt_base in zip(ref_seq, alt_seq):
             is_ref = ref_base != '-'
@@ -66,7 +57,8 @@ def msa_to_vars(msa, ref_seq, chrom, start_pos=0, abs_anchor_base='N'):
                     cur_variant = []
             else:
                 if not cur_variant:
-                    # -1 for the anchor base we're forcing on
+                    # We don't need to correct cur_pos for the anchor base
+                    # because we're now assuming that the ref coordinates are zero based
                     cur_variant = [chrom, cur_pos - 1, '.', anchor_base + ref_base, \
                                    anchor_base + alt_base, '.', '.', '.', 'GT']
                 else:
@@ -91,12 +83,11 @@ def msa_to_vars(msa, ref_seq, chrom, start_pos=0, abs_anchor_base='N'):
     sample_names = sorted(list(sample_names))
     return sample_names, final_vars
 
-def make_vcf(variants, sample_names, header):
+def make_vcf(variants, sample_names):
     """
     Write VCF - building GTs
     """
     out = StringIO()
-    out.write(header)
     out.write("#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT\t")
     out.write("\t".join(sample_names) + '\n')
 
@@ -114,13 +105,12 @@ def make_vcf(variants, sample_names, header):
     out.seek(0)
     return out.read()
 
-def msa2vcf(fn, header=None, anchor_base=None):
+def msa2vcf(fn, anchor_base=None):
     """
     Parse an MSA file and returns its VCF as a string
 
     Assumes one entry in the MSA has the name `ref_${chrom}:${start}-${end}` which gives VCF entries coordinates
 
-    VCF can be given a header or a minimal one is created with only file format and a single contig line
     Provide anchor_base to prevent 'N' from being used as an anchor base
     Returns a string
     """
@@ -133,7 +123,5 @@ def msa2vcf(fn, header=None, anchor_base=None):
     start_pos = int(start_pos)
 
     sample_names, variants = msa_to_vars(msa, ref_seq, chrom, start_pos, anchor_base)
-    if header is None:
-        header = build_header(chrom)
 
-    return make_vcf(variants, sample_names, header)
+    return make_vcf(variants, sample_names)

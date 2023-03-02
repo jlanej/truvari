@@ -170,10 +170,6 @@ cmd_exe
 ^^^^^^^
 .. autofunction:: cmd_exe
 
-consolidate_phab_vcfs
-^^^^^^^^^^^^^^^^^^^^^
-.. autofunction:: consolidate_phab_vcfs
-
 count_entries
 ^^^^^^^^^^^^^
 .. autofunction:: count_entries
