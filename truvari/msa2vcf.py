@@ -81,9 +81,27 @@ def zip_seq_var(refseq, altseq, anchor_base='N'):
             cur_mode = 3
         else: # Mis
             cur_mode = 1
-        
+    
         ref_base = '' if ref_base == '-' else ref_base
         alt_base = '' if alt_base == '-' else alt_base
+        
+        if cur_mode == prev_mode == 0:
+            cur_pos += 1
+            anchor_base = ref_base
+            continue # still matching
+        
+        # keep extending previous variant
+        if cur_mode == prev_mode:
+            cur_pos += 1
+            cur_variant[REFIDX] += ref_base
+            cur_variant[ALTIDX] += alt_base
+            continue
+
+        if cur_mode != prev_mode:
+            # Finish old variant
+            if cur_variant:
+                ret.append(cur_variant)
+            cur_variant = []
 
         # Back to matching - finish previous variant
         if cur_mode == 0 and cur_mode != prev_mode and cur_variant:
@@ -92,7 +110,13 @@ def zip_seq_var(refseq, altseq, anchor_base='N'):
             cur_variant = []
             prev_mode = 0
             continue
-        
+
+        if cur_mode == prev_mode: # continue the previous variant
+            cur_variant[REFIDX] += ref_base
+            cur_variant[ALTIDX] += alt_base       
+            continue
+
+        #
         # First change
         if prev_mode == 0 and cur_mode != 0:
             cur_variant = [cur_pos, anchor_base + ref_base, anchor_base + alt_base]
