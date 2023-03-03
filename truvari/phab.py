@@ -87,7 +87,7 @@ def pull_variants(vcf_fn, chrom, start, end):
     """
     ret = []
     vcf = pysam.VariantFile(vcf_fn)
-    for entry in vcf.fetch(chrom, start, end):
+    for entry in vcf.fetch(chrom, start - 100, end + 100):
         st, ed = truvari.entry_boundaries(entry)
         if start <= st < ed < end:
             ret.append(entry)
@@ -140,15 +140,16 @@ def make_haplotypes(variants, refseq, refstart, sample=0):
         Add upto variant's end to the sequence
         """
         seq.write(ref[last_pos: entry.start - refpos])
-        seq.write(entry.alts[0])
+        if entry.alts[0] != '*':
+            seq.write(entry.alts[0])
         return entry.stop - refpos
 
     m_paths = [StringIO(), StringIO()]
     last_pos = [0, 0]
     for entry in variants:
-        if entry.samples[sample]["GT"][0] == 1:
+        if entry.samples[sample]["GT"][0] == 1 and entry.start > last_pos[0]:
             last_pos[0] = add_var(entry, m_paths[0], last_pos[0], refseq, refstart)
-        if entry.samples[sample]["GT"][1] == 1:
+        if entry.samples[sample]["GT"][1] == 1 and entry.start > last_pos[1]:
             last_pos[1] = add_var(entry, m_paths[1], last_pos[1], refseq, refstart)
     for pos, path in enumerate(m_paths):
         path.write(refseq[last_pos[pos]:])
@@ -202,18 +203,19 @@ def phab(var_region, base_vcf, reference, buffer=100,
         oseq = ref.fetch(var_region[0], start - 1, end)
         anchor_base = oseq[0]
         ref_seq = oseq[1:]
+        reftag = f"{var_region[0]}:{start}-{end}"
         fout.write(f">ref_{var_region[0]}_{start}_{end}\n{ref_seq}\n")
         
         for samp in bSamples:
             for i, seq in enumerate(make_haplotypes(b_variants, ref_seq, start, samp)):
-                name = f"{samp}_{i + 1}_"
+                name = f"{samp}_{i + 1}_{reftag}"
                 fout.write(f">{name}\n{seq}\n")
                     
         if cSamples is not None:
             prefix = 'p:' if prefix_comp else ''
             for samp in cSamples:
                 for i, seq in enumerate(make_haplotypes(c_variants, ref_seq, start, samp)):
-                    name = f"{prefix}{samp}_{i + 1}_"
+                    name = f"{prefix}{samp}_{i + 1}_{reftag}"
                     fout.write(f">{name}\n{seq}\n")
  
     msa_output = sequences + '.msa'

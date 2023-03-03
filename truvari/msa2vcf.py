@@ -9,6 +9,99 @@ import pysam
 REFIDX = 3
 ALTIDX = 4
 
+
+def make_all_tests():
+    """
+    Every msa pattern I can think of
+    ref_msa, alt_msa, variants (pos, ref, alt)
+    """
+    ret = []
+    # Clean insertion
+    ret.append(("ATCG----------ATCG",
+                "ATCGATCGGATCGGATCG",
+                [[3, "G", "GATCGGATCGG"]]))
+    # Clean deletion
+    ret.append(("ATCGATCGGATCGGATCG",
+                "ATCG----------ATCG",
+                [[3, "GATCGGATCGG", "G"]]))
+    # SNP
+    ret.append(("ATCGCG",
+                "ATCACG",
+                [[3, "G", "A"]]))
+    # SNP on anchor base of insertion
+    ret.append(("ATCG----------ATCG",
+                "ATCCATCGGATCGGATCG",
+                [[3, "G", "CATCGGATCGG"]]))
+    # SNP on anchor base of deletion
+    ret.append(("ATCGATCGGATCGGATCG",
+                "ATCT----------ATCG",
+                [[3, "GATCGGATCGG", "T"]]))
+    # MNP
+    ret.append(("ATCGCG",
+                "ATAACG",
+                [[2, "CG", "AA"]]))
+    
+    # Starting INS
+    ret.append(("----------ATCG",
+                "ATCGGATCGGATCG",
+                [[-1, "N", "NATCGGATCGG"]]))
+
+    # InDel - we're just going to make them overlapping
+    ret.append(("ATCG-----ATCGGATCGGATCG",
+                "ATCGATCGG----------ATCG",
+                [[3, "GATCGGATCGG", "G"],
+                 [3, "G", "GATCGG"]))
+
+    return ret
+
+def zip_seq_var(refseq, altseq, anchor_base='N'):
+    """
+    Zip the msa and create list of variants [[POS (zero based), REF, ALT]]
+    """
+    ret = []
+    prev_mode = 0 # match - 1 mismatch - 2 insertion - 3 deletion
+    cur_variant = []
+    cur_pos = 0
+    for ref_base, alt_base in zip(refseq, altseq):
+        # Null
+        if ref_base == '-' and alt_base == '-':
+            continue
+        
+        # What are we looking at
+        if ref_base == alt_base: # Mat
+            cur_mode = 0
+        elif ref_base == '-': # Ins
+            cur_mode = 2
+        elif alt_base == '-': # Del
+            cur_mode = 3
+        else: # Mis
+            cur_mode = 1
+        
+        ref_base = '' if ref_base == '-' else ref_base
+        alt_base = '' if alt_base == '-' else alt_base
+
+        # Back to matching - finish previous variant
+        if cur_mode == 0 and cur_mode != prev_mode and cur_variant:
+            # need a 'alter with anchor base' method TODO
+            ret.append(cur_variant)
+            cur_variant = []
+            continue
+        
+        # First change
+        if prev_mode == 0 and cur_mode != 0:
+            cur_variant = [cur_pos, anchor_base + ref_base, anchor_base + alt_base]
+            prev_mode = cur_mode
+            
+            continue
+        
+        # Continue change
+        # InsDel - keep extending
+        if cur_mode in [2, 3]:
+            cur_variant[REFIDX] += ref_base
+            cur_variant[ALTIDX] += alt_base
+            
+        # And we'll add anchor base at the end
+
 def msa_to_vars(msa, ref_seq, chrom, start_pos=0, abs_anchor_base='N'):
     """
     Turn MSA into VCF entries and their presence in samples
