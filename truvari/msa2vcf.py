@@ -51,6 +51,11 @@ def make_all_tests():
                 "ATCGATCGG----------ATCG",
                 [[3, "GATCGGATCGG", "G"],
                  [3, "G", "GATCGG"]))
+    # DelIn - we're just going to make them overlapping
+    ret.append(("ATCGATCGG----------ATCG",
+                "ATCG-----ATCGGATCGGATCG",
+                [[3, "G", "GATCGG"],
+                 [3, "GATCGGATCGG", "G"]))
 
     return ret
 
@@ -85,6 +90,7 @@ def zip_seq_var(refseq, altseq, anchor_base='N'):
             # need a 'alter with anchor base' method TODO
             ret.append(cur_variant)
             cur_variant = []
+            prev_mode = 0
             continue
         
         # First change
