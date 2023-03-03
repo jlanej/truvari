@@ -296,11 +296,13 @@ def refine_main(cmdargs):
     # Send the vcfs to phab
     to_eval_coords = regions[regions["refined"]][["chrom", "start", "end"]].to_numpy().tolist()
     phab_dir = os.path.join(args.benchdir, "phab")
-    truvari.phab_multi(base_vcf, args.reference, phab_dir, to_eval_coords,
-                       comp_vcf=comp_vcf, prefix_comp=True, threads=args.threads)
+    result = truvari.phab_multi(to_eval_coords, base_vcf, args.reference, comp_vcf=comp_vcf,
+                                prefix_comp=True, threads=args.threads)
 
     phab_vcf = os.path.join(args.benchdir, "phab.output.vcf.gz")
-    truvari.consolidate_phab_vcfs(phab_dir, phab_vcf)
+    with open(phab_vcf[:-len('.gz')], 'w') as fout:
+        fout.write(result)
+    truvari.compress_index_vcf(phab_vcf[:-len('.gz')], fout=phab_vcf)
 
     # Now run bench on the phab harmonized variants
     matcher = truvari.Matcher(params)

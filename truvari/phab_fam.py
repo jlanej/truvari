@@ -89,7 +89,7 @@ def pull_variants(vcf_fn, chrom, start, end):
     vcf = pysam.VariantFile(vcf_fn)
     for entry in vcf.fetch(chrom, start, end):
         st, ed = truvari.entry_boundaries(entry)
-        if start <= st < ed < end:
+        if start <= st < ed <= end:
             ret.append(entry)
     return ret
 
@@ -146,6 +146,8 @@ def make_haplotypes(variants, refseq, refstart, sample=0):
     m_paths = [StringIO(), StringIO()]
     last_pos = [0, 0]
     for entry in variants:
+        if entry.alleles[1] == "*":
+            continue
         if entry.samples[sample]["GT"][0] == 1:
             last_pos[0] = add_var(entry, m_paths[0], last_pos[0], refseq, refstart)
         if entry.samples[sample]["GT"][1] == 1:
@@ -154,6 +156,8 @@ def make_haplotypes(variants, refseq, refstart, sample=0):
         path.write(refseq[last_pos[pos]:])
         path.seek(0)
     return [_.read() for _ in m_paths]
+
+from pyfamsa import Aligner, Sequence
 
 def phab(var_region, base_vcf, reference, buffer=100,
         comp_vcf=None, bSamples=None, cSamples=None,
@@ -192,14 +196,37 @@ def phab(var_region, base_vcf, reference, buffer=100,
     if len(b_variants) + len(c_variants) == 0:
         return ""
 
+    ref = pysam.FastaFile(reference)
     start = var_region[1] - buffer
     end = var_region[2] + buffer
     anchor_base = 'N' # will need later
+    
+    ref_seq = ref.fetch(var_region[0], start, end)
+    sequences = [Sequence(f"ref_{var_region[0]}_{start}_{end}".encode(), ref_seq.encode())]
+    for samp in bSamples:
+        for i, seq in enumerate(make_haplotypes(b_variants, ref_seq, start, samp)):
+            sequences.append(Sequence(f"{samp}_{i + 1}_".encode(), seq.encode()))
+
+    if cSamples is not None:
+        prefix = 'p:' if prefix_comp else ''
+        for samp in cSamples:
+            for i, seq in enumerate(make_haplotypes(c_variants, ref_seq, start, samp)):
+                sequences.append(Sequence(f"{prefix}{samp}_{i + 1}_".encode(), seq.encode()))
+    
+    aligner = Aligner()
+    msa = aligner.align(sequences)
+    
+    msa_output = truvari.make_temp_filename(suffix=".msa")
+    with open(msa_output, 'w') as fout:
+        for sequence in msa:
+            fout.write(f">{sequence.id.decode()}\n{sequence.sequence.decode()}\n")
+    return truvari.msa2vcf(msa_output, anchor_base)
+
+def mafft_break():
     sequences = truvari.make_temp_filename(suffix=".fa")
 
-    ref = pysam.FastaFile(reference)
     with open(sequences, 'w') as fout:
-        oseq = ref.fetch(var_region[0], start - 1, end)
+        oseq = ref.fetch(var_region[0], start, end)
         anchor_base = oseq[0]
         ref_seq = oseq[1:]
         fout.write(f">ref_{var_region[0]}_{start}_{end}\n{ref_seq}\n")
